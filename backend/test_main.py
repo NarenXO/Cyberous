@@ -91,3 +91,11 @@ def test_login_with_attack_simulation():
     data = response.json()
     assert "detail" in data
     assert "automated attack detection" in data["detail"]["detail"].lower()
+
+def test_reset_endpoint():
+    """Test the reset endpoint"""
+    response = client.post("/api/reset")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] == True
+    assert "Demo state reset successfully" in data["message"]

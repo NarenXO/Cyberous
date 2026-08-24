@@ -251,6 +251,19 @@ async def get_transactions(username: str = Depends(verify_token)):
 async def get_trust_history(username: str = Depends(verify_token)):
     return {"history": trust_history_db}
 
+@app.post("/api/reset")
+async def reset_demo():
+    """Reset demo database to initial state"""
+    users_db["naren"]["balance"] = 12450.00
+    users_db["naren"]["trust_score"] = 82
+    users_db["naren"]["frozen"] = False
+    
+    users_db["salman"]["balance"] = 0.00
+    users_db["salman"]["trust_score"] = 23
+    users_db["salman"]["frozen"] = False
+    
+    return {"success": True, "message": "Demo state reset successfully"}
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
