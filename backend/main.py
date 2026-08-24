@@ -7,6 +7,7 @@ import bcrypt
 import jwt
 import datetime
 from datetime import datetime as dt
+from services.risk_engine import calculate_trust_score, evaluate_transfer_risk
 
 app = FastAPI()
 
@@ -105,8 +106,16 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) 
         raise HTTPException(status_code=401, detail="Invalid token")
 
 # Helper function to get agents array
-def get_agents(trust_score: int, full_evaluation: bool = False) -> List[Dict]:
-    if full_evaluation:
+def get_agents(trust_score: int, full_evaluation: bool = False, risk_evaluation: Optional[Dict] = None) -> List[Dict]:
+    if full_evaluation and risk_evaluation:
+        return [
+            {"name": "Signal Collector", "score": risk_evaluation["signal_collector_score"], "status": "done"},
+            {"name": "Correlation Agent", "score": risk_evaluation["correlation_score"], "status": "done"},
+            {"name": "Behavior Trail", "score": risk_evaluation["behavior_trail_score"], "status": "done"},
+            {"name": "Decision Agent", "score": risk_evaluation["decision_score"], "status": "done"},
+            {"name": "Explainer Agent", "score": risk_evaluation["explainer_score"], "status": "done"}
+        ]
+    elif full_evaluation:
         return [
             {"name": "Signal Collector", "score": 100, "status": "done"},
             {"name": "Correlation Agent", "score": trust_score, "status": "done"},
@@ -131,7 +140,19 @@ async def login(request: LoginRequest):
     if not user or not verify_password(request.password, user["password"]):
         raise HTTPException(status_code=401, detail={"detail": "Invalid credentials"})
     
+    # Check if account is already frozen before evaluating new trust score
     if user["frozen"]:
+        raise HTTPException(status_code=403, detail={"detail": "Account frozen. OTP verification required."})
+    
+    # Calculate dynamic trust score based on behavioral biometrics
+    trust_score = calculate_trust_score(request.behavior_data, request.cyberous_enabled)
+    
+    # Update user's trust score in database
+    user["trust_score"] = trust_score
+    
+    # Freeze account if trust score is below 40
+    if trust_score < 40:
+        user["frozen"] = True
         raise HTTPException(status_code=403, detail={"detail": "Account frozen. OTP verification required."})
     
     token = create_token(user["username"])
@@ -140,8 +161,8 @@ async def login(request: LoginRequest):
         "token": token,
         "username": user["username"],
         "balance": user["balance"],
-        "trust_score": user["trust_score"],
-        "agents": get_agents(user["trust_score"], full_evaluation=False)
+        "trust_score": trust_score,
+        "agents": get_agents(trust_score, full_evaluation=False)
     }
 
 @app.post("/api/transfer")
@@ -152,19 +173,27 @@ async def transfer(request: TransferRequest, username: str = Depends(verify_toke
         raise HTTPException(status_code=401, detail="User not found")
     
     if request.pin != user["pin"]:
-        raise HTTPException(status_code=401, detail="Invalid PIN")
+        raise HTTPException(status_code=400, detail="Invalid PIN")
     
     if request.amount > user["balance"]:
         raise HTTPException(status_code=400, detail="Insufficient balance")
     
-    # Process transfer
-    user["balance"] -= request.amount
+    # Evaluate transfer risk using risk engine
+    risk_evaluation = evaluate_transfer_risk(request.amount, user["trust_score"], user["balance"])
+    
+    # Process transfer only if decision is "grant"
+    if risk_evaluation["decision"] == "grant":
+        user["balance"] -= request.amount
+    
+    # Freeze account if decision is "freeze"
+    if risk_evaluation["decision"] == "freeze":
+        user["frozen"] = True
     
     return {
-        "decision": "grant",
-        "explanation": "Transaction approved based on risk evaluation.",
+        "decision": risk_evaluation["decision"],
+        "explanation": risk_evaluation["explanation"],
         "new_balance": user["balance"],
-        "agents": get_agents(user["trust_score"], full_evaluation=True)
+        "agents": get_agents(user["trust_score"], full_evaluation=True, risk_evaluation=risk_evaluation)
     }
 
 @app.post("/api/verify-otp")
