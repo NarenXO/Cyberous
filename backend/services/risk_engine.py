@@ -10,6 +10,37 @@ BASELINE = {
     "avg_mouse_velocity": (1.5, 3.5)  # pixels/ms
 }
 
+def is_attack_detected(behavior_data: Dict) -> bool:
+    """
+    Detect automated bot/rapid attack patterns in behavior data.
+    
+    Args:
+        behavior_data: Dict containing behavioral metrics
+    
+    Returns:
+        True if attack patterns are detected, False otherwise
+    """
+    # Check for explicit attack simulation flag
+    if behavior_data.get("is_attack_simulation") == True:
+        return True
+    
+    # Check for bot-like keystroke patterns (too fast)
+    keystroke_interval = behavior_data.get("avg_keystroke_interval", 125)
+    if keystroke_interval < 30:
+        return True
+    
+    # Check for bot-like hold duration (too short)
+    hold_duration = behavior_data.get("avg_hold_duration", 85)
+    if hold_duration < 20:
+        return True
+    
+    # Check for rapid session duration (too short)
+    session_duration = behavior_data.get("session_duration", 1000)
+    if session_duration < 500:
+        return True
+    
+    return False
+
 def calculate_trust_score(behavior_data: Optional[Dict], cyberous_enabled: bool) -> int:
     """
     Calculate trust score (0-100) based on behavioral biometrics data.
@@ -24,6 +55,10 @@ def calculate_trust_score(behavior_data: Optional[Dict], cyberous_enabled: bool)
     # Default trust score if behavioral biometrics is disabled or no data
     if not cyberous_enabled or behavior_data is None:
         return 50
+    
+    # Check for automated bot/rapid attack patterns
+    if is_attack_detected(behavior_data):
+        return 15  # Force low trust score for attacks
     
     try:
         # Extract metrics from behavior_data
@@ -146,18 +181,21 @@ async def get_grok_explanation(decision: str, trust_score: int) -> str:
     except (httpx.TimeoutException, httpx.HTTPError, KeyError, IndexError):
         return get_fallback_explanation(decision, trust_score)
 
-def get_fallback_explanation(decision: str, trust_score: int) -> str:
+def get_fallback_explanation(decision: str, trust_score: int, is_attack: bool = False) -> str:
     """
     Get fallback explanation when Grok API is unavailable.
     
     Args:
         decision: The decision made
         trust_score: The trust score
+        is_attack: Whether this is an attack detection
     
     Returns:
         Fallback explanation string
     """
-    if decision == "grant":
+    if is_attack:
+        return "Critical Threat: Automated bot behavior / rapid credential injection detected. Account frozen immediately."
+    elif decision == "grant":
         return "Transaction approved: Normal behavioral biometrics detected."
     elif decision == "verify":
         return "Step-up authentication required: Moderate risk detected."
@@ -166,7 +204,7 @@ def get_fallback_explanation(decision: str, trust_score: int) -> str:
     else:
         return "Transaction reviewed based on risk evaluation."
 
-def evaluate_transfer_risk(amount: float, trust_score: int, balance: float) -> Dict:
+def evaluate_transfer_risk(amount: float, trust_score: int, balance: float, is_attack: bool = False) -> Dict:
     """
     Evaluate transaction risk and determine decision.
     
@@ -174,11 +212,24 @@ def evaluate_transfer_risk(amount: float, trust_score: int, balance: float) -> D
         amount: Transfer amount
         trust_score: User's current trust score
         balance: User's current balance
+        is_attack: Whether this is an attack detection
     
     Returns:
         Dict with decision, explanation, and agent scores
     """
-    if trust_score >= 70 and amount <= balance:
+    if is_attack:
+        decision = "freeze"
+        explanation = get_fallback_explanation(decision, trust_score, is_attack=True)
+        return {
+            "decision": decision,
+            "explanation": explanation,
+            "signal_collector_score": 100,
+            "correlation_score": trust_score,
+            "behavior_trail_score": 100,
+            "decision_score": 100,
+            "explainer_score": 100
+        }
+    elif trust_score >= 70 and amount <= balance:
         decision = "grant"
         explanation = get_fallback_explanation(decision, trust_score)
         return {

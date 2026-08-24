@@ -9,7 +9,7 @@ import datetime
 import os
 from datetime import datetime as dt
 from dotenv import load_dotenv
-from services.risk_engine import calculate_trust_score, evaluate_transfer_risk
+from services.risk_engine import calculate_trust_score, evaluate_transfer_risk, is_attack_detected
 
 # Load environment variables
 load_dotenv()
@@ -44,16 +44,16 @@ security = HTTPBearer()
 
 # In-memory database
 users_db = {
-    "alice": {
-        "username": "alice",
+    "naren": {
+        "username": "naren",
         "password": hash_password("password123"),
         "balance": 12450.00,
         "pin": "1234",
         "frozen": False,
         "trust_score": 82
     },
-    "attacker": {
-        "username": "attacker",
+    "salman": {
+        "username": "salman",
         "password": hash_password("password123"),
         "balance": 0.00,
         "pin": "0000",
@@ -162,15 +162,20 @@ async def login(request: LoginRequest):
     
     # Calculate dynamic trust score based on behavioral biometrics
     behavior_dict = request.behavior_data.model_dump() if request.behavior_data else None
+    
+    # Check for automated attack detection
+    attack_detected = is_attack_detected(behavior_dict) if behavior_dict else False
+    
     trust_score = calculate_trust_score(behavior_dict, request.cyberous_enabled)
     
     # Update user's trust score in database
     user["trust_score"] = trust_score
     
-    # Freeze account if trust score is below 40
-    if trust_score < 40:
+    # Freeze account if trust score is below 40 or attack is detected
+    if trust_score < 40 or attack_detected:
         user["frozen"] = True
-        raise HTTPException(status_code=403, detail={"detail": "Account frozen. OTP verification required."})
+        error_message = "Account frozen due to automated attack detection. OTP verification required." if attack_detected else "Account frozen. OTP verification required."
+        raise HTTPException(status_code=403, detail={"detail": error_message})
     
     token = create_token(user["username"])
     
@@ -194,6 +199,10 @@ async def transfer(request: TransferRequest, username: str = Depends(verify_toke
     
     if request.amount > user["balance"]:
         raise HTTPException(status_code=400, detail="Insufficient balance")
+    
+    # Check if account is frozen or trust score is below 40
+    if user["frozen"] or user["trust_score"] < 40:
+        raise HTTPException(status_code=403, detail={"detail": "Account frozen due to automated attack detection. OTP verification required."})
     
     # Evaluate transfer risk using risk engine
     risk_evaluation = evaluate_transfer_risk(request.amount, user["trust_score"], user["balance"])
