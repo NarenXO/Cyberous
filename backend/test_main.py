@@ -51,6 +51,15 @@ def test_login_with_behavioral_biometrics():
     data = response.json()
     assert "trust_score" in data
     assert data["trust_score"] > 50
+    assert "agents" in data
+    assert len(data["agents"]) == 5
+    # Check new agent schema fields
+    for agent in data["agents"]:
+        assert "name" in agent
+        assert "score" in agent
+        assert "status" in agent
+        assert "insight" in agent
+        assert "latency_ms" in agent
 
 def test_login_with_untrusted_location():
     """Test login with untrusted location"""
