@@ -149,15 +149,16 @@ async def get_grok_explanation(decision: str, trust_score: int) -> str:
         return get_fallback_explanation(decision, trust_score)
     
     try:
+        print("[GROK AI] Contacting xAI Grok-2 API...")
         async with httpx.AsyncClient(timeout=2.0) as client:
             response = await client.post(
                 "https://api.x.ai/v1/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {grok_api_key}",
+                    "Authorization": "Bearer " + grok_api_key,
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "grok-beta",
+                    "model": "grok-2-latest",
                     "messages": [
                         {
                             "role": "system",
@@ -175,6 +176,7 @@ async def get_grok_explanation(decision: str, trust_score: int) -> str:
             if response.status_code == 200:
                 data = response.json()
                 explanation = data["choices"][0]["message"]["content"].strip()
+                print(f"[GROK AI RESPONSE]: {explanation}")
                 return explanation
             else:
                 return get_fallback_explanation(decision, trust_score)
