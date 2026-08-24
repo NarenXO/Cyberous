@@ -6,15 +6,21 @@ from typing import Optional, Dict, List
 import bcrypt
 import jwt
 import datetime
+import os
 from datetime import datetime as dt
+from dotenv import load_dotenv
 from services.risk_engine import calculate_trust_score, evaluate_transfer_risk
+
+# Load environment variables
+load_dotenv()
 
 app = FastAPI()
 
 # CORS middleware
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -28,7 +34,7 @@ def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
 # JWT settings
-SECRET_KEY = "cyberous-secret-key-2024"
+SECRET_KEY = os.getenv("SECRET_KEY", "cyberous-secret-key-2024")
 ALGORITHM = "HS256"
 
 # Security
@@ -224,6 +230,10 @@ async def get_transactions(username: str = Depends(verify_token)):
 @app.get("/api/trust-history")
 async def get_trust_history(username: str = Depends(verify_token)):
     return {"history": trust_history_db}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
 
 if __name__ == "__main__":
     import uvicorn

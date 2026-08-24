@@ -3,3 +3,5 @@ uvicorn
 pyjwt
 passlib[bcrypt]
 pydantic
+python-dotenv
+pytest
