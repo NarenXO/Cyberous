@@ -90,7 +90,7 @@ def test_login_with_attack_simulation():
     assert response.status_code == 403
     data = response.json()
     assert "detail" in data
-    assert "automated attack detection" in data["detail"]["detail"].lower()
+    assert "automated attack detection" in data["detail"].lower()
 
 def test_reset_endpoint():
     """Test the reset endpoint"""

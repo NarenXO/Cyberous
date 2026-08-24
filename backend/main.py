@@ -85,6 +85,7 @@ class BehaviorData(BaseModel):
     ip_address: str = "127.0.0.1"
     location: str = "Local Baseline"
     device_type: str = "Desktop"
+    is_attack_simulation: Optional[bool] = False
 
 class LoginRequest(BaseModel):
     username: str
@@ -156,26 +157,35 @@ async def login(request: LoginRequest):
     if not user or not verify_password(request.password, user["password"]):
         raise HTTPException(status_code=401, detail={"detail": "Invalid credentials"})
     
-    # Check if account is already frozen before evaluating new trust score
+    # Check if account is already frozen before processing
     if user["frozen"]:
-        raise HTTPException(status_code=403, detail={"detail": "Account frozen. OTP verification required."})
+        raise HTTPException(status_code=403, detail="Account frozen due to automated attack detection. OTP verification required.")
     
     # Calculate dynamic trust score based on behavioral biometrics
     behavior_dict = request.behavior_data.model_dump() if request.behavior_data else None
     
-    # Check for automated attack detection
+    # Check for automated attack detection - explicit check for is_attack_simulation
+    attack_simulation = False
+    if request.behavior_data and request.behavior_data.is_attack_simulation == True:
+        attack_simulation = True
+    
     attack_detected = is_attack_detected(behavior_dict) if behavior_dict else False
+    
+    # If attack detected via simulation or behavioral patterns, freeze immediately
+    if attack_simulation or attack_detected:
+        user["frozen"] = True
+        user["trust_score"] = 15
+        raise HTTPException(status_code=403, detail="Account frozen due to automated attack detection. OTP verification required.")
     
     trust_score = calculate_trust_score(behavior_dict, request.cyberous_enabled)
     
     # Update user's trust score in database
     user["trust_score"] = trust_score
     
-    # Freeze account if trust score is below 40 or attack is detected
-    if trust_score < 40 or attack_detected:
+    # Freeze account if trust score is below 40
+    if trust_score < 40:
         user["frozen"] = True
-        error_message = "Account frozen due to automated attack detection. OTP verification required." if attack_detected else "Account frozen. OTP verification required."
-        raise HTTPException(status_code=403, detail={"detail": error_message})
+        raise HTTPException(status_code=403, detail="Account frozen. OTP verification required.")
     
     token = create_token(user["username"])
     
