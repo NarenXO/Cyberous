@@ -68,14 +68,25 @@ transactions_db = [
     {"id": 2, "type": "debit", "amount": 1200, "recipient": "Rent", "timestamp": "2025-01-14 14:00"}
 ]
 
-# Mock trust history
-trust_history_db = [
-    {"login_time": "Mon 9:00 AM", "score": 85},
-    {"login_time": "Tue 8:45 AM", "score": 82},
-    {"login_time": "Wed 9:10 AM", "score": 88},
-    {"login_time": "Thu 2:30 AM", "score": 23},
-    {"login_time": "Now", "score": 82}
-]
+# Per-user trust history (max 8 entries per user)
+trust_history_db = {
+    "naren": [
+        {"login_time": "Mon 9:00 AM", "score": 85},
+        {"login_time": "Tue 8:45 AM", "score": 82},
+        {"login_time": "Wed 9:10 AM", "score": 88},
+        {"login_time": "Thu 2:30 AM", "score": 23},
+        {"login_time": "Now", "score": 82}
+    ],
+    "salman": [
+        {"login_time": "Mon 10:00 AM", "score": 23},
+        {"login_time": "Tue 11:30 AM", "score": 25},
+        {"login_time": "Now", "score": 23}
+    ]
+}
+
+# Audit logs storage
+audit_logs_db = []
+audit_log_id_counter = 0
 
 # Pydantic models
 class BehaviorData(BaseModel):
@@ -119,8 +130,41 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) 
         return username
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.JWTError:
+    except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+def add_audit_log(username: str, event: str, detail: str, severity: str = "info"):
+    """Add an audit log entry"""
+    global audit_log_id_counter
+    audit_log_id_counter += 1
+    timestamp = dt.now().strftime("%I:%M %p")
+    
+    log_entry = {
+        "id": audit_log_id_counter,
+        "timestamp": timestamp,
+        "username": username,
+        "event": event,
+        "detail": detail,
+        "severity": severity
+    }
+    
+    audit_logs_db.insert(0, log_entry)
+    
+    # Keep only latest 50 logs
+    if len(audit_logs_db) > 50:
+        audit_logs_db.pop()
+
+def add_trust_history(username: str, trust_score: int):
+    """Add a trust history entry for a user (max 8 entries)"""
+    if username not in trust_history_db:
+        trust_history_db[username] = []
+    
+    timestamp = dt.now().strftime("%I:%M %p")
+    trust_history_db[username].append({"login_time": timestamp, "score": trust_score})
+    
+    # Keep only last 8 entries
+    if len(trust_history_db[username]) > 8:
+        trust_history_db[username] = trust_history_db[username][-8:]
 
 # Helper function to get agents array
 def get_agents(trust_score: int, full_evaluation: bool = False, risk_evaluation: Optional[Dict] = None) -> List[Dict]:
@@ -175,6 +219,7 @@ async def login(request: LoginRequest):
     if attack_simulation or attack_detected:
         user["frozen"] = True
         user["trust_score"] = 15
+        add_audit_log(user["username"], "ATTACK_BLOCKED", "Automated bot behavior detected. Account frozen.", "critical")
         raise HTTPException(status_code=403, detail="Account frozen due to automated attack detection. OTP verification required.")
     
     trust_score = calculate_trust_score(behavior_dict, request.cyberous_enabled)
@@ -185,7 +230,12 @@ async def login(request: LoginRequest):
     # Freeze account if trust score is below 40
     if trust_score < 40:
         user["frozen"] = True
+        add_audit_log(user["username"], "ACCOUNT_FROZEN", f"Trust score {trust_score} below threshold. Account frozen.", "warning")
         raise HTTPException(status_code=403, detail="Account frozen. OTP verification required.")
+    
+    # Add trust history entry and audit log for successful login
+    add_trust_history(user["username"], trust_score)
+    add_audit_log(user["username"], "LOGIN_SUCCESS", f"User logged in successfully. Trust score: {trust_score}", "info")
     
     token = create_token(user["username"])
     
@@ -220,10 +270,13 @@ async def transfer(request: TransferRequest, username: str = Depends(verify_toke
     # Process transfer only if decision is "grant"
     if risk_evaluation["decision"] == "grant":
         user["balance"] -= request.amount
-    
-    # Freeze account if decision is "freeze"
-    if risk_evaluation["decision"] == "freeze":
+        add_trust_history(user["username"], user["trust_score"])
+        add_audit_log(user["username"], "TRANSFER_GRANTED", f"Transfer of {request.amount} to {request.recipient} approved.", "info")
+    elif risk_evaluation["decision"] == "verify":
+        add_audit_log(user["username"], "TRANSFER_VERIFY", f"Transfer of {request.amount} requires verification.", "warning")
+    elif risk_evaluation["decision"] == "freeze":
         user["frozen"] = True
+        add_audit_log(user["username"], "TRANSFER_FROZEN", f"Transfer of {request.amount} blocked due to high risk. Account frozen.", "critical")
     
     return {
         "decision": risk_evaluation["decision"],
@@ -246,6 +299,8 @@ async def verify_otp(request: VerifyOtpRequest, username: str = Depends(verify_t
     # Unfreeze account if frozen
     user["frozen"] = False
     
+    add_audit_log(user["username"], "OTP_VERIFY_SUCCESS", "Account unfrozen via OTP verification.", "info")
+    
     new_token = create_token(user["username"])
     
     return {
@@ -259,7 +314,14 @@ async def get_transactions(username: str = Depends(verify_token)):
 
 @app.get("/api/trust-history")
 async def get_trust_history(username: str = Depends(verify_token)):
-    return {"history": trust_history_db}
+    # Return per-user trust history
+    user_history = trust_history_db.get(username, [])
+    return {"history": user_history}
+
+@app.get("/api/audit-logs")
+async def get_audit_logs(username: str = Depends(verify_token)):
+    # Return latest 20 logs, newest first
+    return {"logs": audit_logs_db[:20]}
 
 @app.post("/api/reset")
 async def reset_demo():
@@ -271,6 +333,27 @@ async def reset_demo():
     users_db["salman"]["balance"] = 0.00
     users_db["salman"]["trust_score"] = 23
     users_db["salman"]["frozen"] = False
+    
+    # Clear audit logs
+    global audit_logs_db, audit_log_id_counter
+    audit_logs_db.clear()
+    audit_log_id_counter = 0
+    
+    # Re-seed trust history baselines
+    trust_history_db["naren"] = [
+        {"login_time": "Mon 9:00 AM", "score": 85},
+        {"login_time": "Tue 8:45 AM", "score": 82},
+        {"login_time": "Wed 9:10 AM", "score": 88},
+        {"login_time": "Thu 2:30 AM", "score": 23},
+        {"login_time": "Now", "score": 82}
+    ]
+    trust_history_db["salman"] = [
+        {"login_time": "Mon 10:00 AM", "score": 23},
+        {"login_time": "Tue 11:30 AM", "score": 25},
+        {"login_time": "Now", "score": 23}
+    ]
+    
+    add_audit_log("system", "DEMO_RESET", "Demo state reset to initial values.", "info")
     
     return {"success": True, "message": "Demo state reset successfully"}
 
