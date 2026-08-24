@@ -18,6 +18,8 @@ app = FastAPI()
 
 # CORS middleware
 allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+if "*" in allowed_origins or os.getenv("ALLOW_ALL_ORIGINS", "false").lower() == "true":
+    allowed_origins = ["*"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -76,11 +78,19 @@ trust_history_db = [
 ]
 
 # Pydantic models
+class BehaviorData(BaseModel):
+    avg_keystroke_interval: Optional[float] = None
+    avg_hold_duration: Optional[float] = None
+    avg_mouse_velocity: Optional[float] = None
+    ip_address: str = "127.0.0.1"
+    location: str = "Local Baseline"
+    device_type: str = "Desktop"
+
 class LoginRequest(BaseModel):
     username: str
     password: str
     cyberous_enabled: bool
-    behavior_data: Optional[Dict] = None
+    behavior_data: Optional[BehaviorData] = None
 
 class TransferRequest(BaseModel):
     amount: float
@@ -119,7 +129,7 @@ def get_agents(trust_score: int, full_evaluation: bool = False, risk_evaluation:
             {"name": "Correlation Agent", "score": risk_evaluation["correlation_score"], "status": "done"},
             {"name": "Behavior Trail", "score": risk_evaluation["behavior_trail_score"], "status": "done"},
             {"name": "Decision Agent", "score": risk_evaluation["decision_score"], "status": "done"},
-            {"name": "Explainer Agent", "score": risk_evaluation["explainer_score"], "status": "done"}
+            {"name": "Explainer Agent", "score": risk_evaluation["explainer_score"], "status": "done", "explanation": risk_evaluation["explanation"]}
         ]
     elif full_evaluation:
         return [
@@ -151,7 +161,8 @@ async def login(request: LoginRequest):
         raise HTTPException(status_code=403, detail={"detail": "Account frozen. OTP verification required."})
     
     # Calculate dynamic trust score based on behavioral biometrics
-    trust_score = calculate_trust_score(request.behavior_data, request.cyberous_enabled)
+    behavior_dict = request.behavior_data.model_dump() if request.behavior_data else None
+    trust_score = calculate_trust_score(behavior_dict, request.cyberous_enabled)
     
     # Update user's trust score in database
     user["trust_score"] = trust_score

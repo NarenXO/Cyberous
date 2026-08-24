@@ -1,4 +1,7 @@
 from typing import Optional, Dict
+import os
+import httpx
+import asyncio
 
 # Normal baseline values for behavioral biometrics
 BASELINE = {
@@ -27,6 +30,7 @@ def calculate_trust_score(behavior_data: Optional[Dict], cyberous_enabled: bool)
         keystroke_interval = behavior_data.get("avg_keystroke_interval", 125)
         hold_duration = behavior_data.get("avg_hold_duration", 85)
         mouse_velocity = behavior_data.get("avg_mouse_velocity", 2.5)
+        location = behavior_data.get("location", "Local Baseline")
         
         # Calculate deviation from baseline for each metric
         keystroke_deviation = calculate_deviation(
@@ -52,6 +56,10 @@ def calculate_trust_score(behavior_data: Optional[Dict], cyberous_enabled: bool)
         
         # Convert deviation to trust score (higher deviation = lower trust)
         trust_score = max(0, min(100, 100 - avg_deviation))
+        
+        # Deduct 15 points if location is outside baseline (untrusted)
+        if location not in ["Local Baseline", "Home", "Office", "Known Location"]:
+            trust_score = max(0, trust_score - 15)
         
         # Round to integer
         return int(trust_score)
@@ -89,6 +97,75 @@ def calculate_deviation(value: float, min_baseline: float, max_baseline: float) 
         # Scale to 20-100 range
         return min(100, 20 + deviation * 80)
 
+async def get_grok_explanation(decision: str, trust_score: int) -> str:
+    """
+    Get explanation from Grok API for the decision.
+    
+    Args:
+        decision: The decision made (grant, verify, freeze)
+        trust_score: The trust score
+    
+    Returns:
+        Explanation string from Grok or fallback
+    """
+    grok_api_key = os.getenv("GROK_API_KEY")
+    
+    if not grok_api_key:
+        return get_fallback_explanation(decision, trust_score)
+    
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.post(
+                "https://api.x.ai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {grok_api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "grok-beta",
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You are the Cyberous Explainer Agent. Explain banking fraud decisions in 1 short sentence."
+                        },
+                        {
+                            "role": "user",
+                            "content": f"Decision: {decision}, Trust Score: {trust_score}. Explain this decision."
+                        }
+                    ],
+                    "max_tokens": 50
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                explanation = data["choices"][0]["message"]["content"].strip()
+                return explanation
+            else:
+                return get_fallback_explanation(decision, trust_score)
+    except (httpx.TimeoutException, httpx.HTTPError, KeyError, IndexError):
+        return get_fallback_explanation(decision, trust_score)
+
+def get_fallback_explanation(decision: str, trust_score: int) -> str:
+    """
+    Get fallback explanation when Grok API is unavailable.
+    
+    Args:
+        decision: The decision made
+        trust_score: The trust score
+    
+    Returns:
+        Fallback explanation string
+    """
+    if decision == "grant":
+        return "Transaction approved: Normal behavioral biometrics detected."
+    elif decision == "verify":
+        return "Step-up authentication required: Moderate risk detected."
+    elif decision == "freeze":
+        return "Account frozen: High behavioral anomaly detected."
+    else:
+        return "Transaction reviewed based on risk evaluation."
+
 def evaluate_transfer_risk(amount: float, trust_score: int, balance: float) -> Dict:
     """
     Evaluate transaction risk and determine decision.
@@ -102,9 +179,11 @@ def evaluate_transfer_risk(amount: float, trust_score: int, balance: float) -> D
         Dict with decision, explanation, and agent scores
     """
     if trust_score >= 70 and amount <= balance:
+        decision = "grant"
+        explanation = get_fallback_explanation(decision, trust_score)
         return {
-            "decision": "grant",
-            "explanation": "Transaction approved based on risk evaluation.",
+            "decision": decision,
+            "explanation": explanation,
             "signal_collector_score": 100,
             "correlation_score": trust_score,
             "behavior_trail_score": 15,
@@ -112,9 +191,11 @@ def evaluate_transfer_risk(amount: float, trust_score: int, balance: float) -> D
             "explainer_score": 100
         }
     elif 40 <= trust_score < 70:
+        decision = "verify"
+        explanation = get_fallback_explanation(decision, trust_score)
         return {
-            "decision": "verify",
-            "explanation": "Step-up authentication required due to moderate risk.",
+            "decision": decision,
+            "explanation": explanation,
             "signal_collector_score": 100,
             "correlation_score": trust_score,
             "behavior_trail_score": 45,
@@ -122,9 +203,11 @@ def evaluate_transfer_risk(amount: float, trust_score: int, balance: float) -> D
             "explainer_score": 100
         }
     else:
+        decision = "freeze"
+        explanation = get_fallback_explanation(decision, trust_score)
         return {
-            "decision": "freeze",
-            "explanation": "High behavioral anomaly detected. Account frozen.",
+            "decision": decision,
+            "explanation": explanation,
             "signal_collector_score": 100,
             "correlation_score": trust_score,
             "behavior_trail_score": 85,

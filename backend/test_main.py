@@ -41,10 +41,32 @@ def test_login_with_behavioral_biometrics():
         "behavior_data": {
             "avg_keystroke_interval": 125,
             "avg_hold_duration": 85,
-            "avg_mouse_velocity": 2.5
+            "avg_mouse_velocity": 2.5,
+            "ip_address": "127.0.0.1",
+            "location": "Local Baseline",
+            "device_type": "Desktop"
         }
     })
     assert response.status_code == 200
     data = response.json()
     assert "trust_score" in data
     assert data["trust_score"] > 50
+
+def test_login_with_untrusted_location():
+    """Test login with untrusted location"""
+    response = client.post("/api/login", json={
+        "username": "alice",
+        "password": "password123",
+        "cyberous_enabled": True,
+        "behavior_data": {
+            "avg_keystroke_interval": 125,
+            "avg_hold_duration": 85,
+            "avg_mouse_velocity": 2.5,
+            "ip_address": "192.168.1.1",
+            "location": "Unknown",
+            "device_type": "Desktop"
+        }
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert "trust_score" in data
