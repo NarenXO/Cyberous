@@ -10,33 +10,37 @@ BASELINE = {
     "avg_mouse_velocity": (1.5, 3.5)  # pixels/ms
 }
 
-def is_attack_detected(behavior_data: Dict) -> bool:
+def is_attack_detected(behavior_data: Optional[Dict]) -> bool:
     """
     Detect automated bot/rapid attack patterns in behavior data.
     
     Args:
-        behavior_data: Dict containing behavioral metrics
+        behavior_data: Dict containing behavioral metrics (can be None or partial)
     
     Returns:
         True if attack patterns are detected, False otherwise
     """
+    # Handle None or empty behavior_data
+    if not behavior_data or not isinstance(behavior_data, dict):
+        return False
+    
     # Check for explicit attack simulation flag
     if behavior_data.get("is_attack_simulation") == True:
         return True
     
     # Check for bot-like keystroke patterns (too fast)
     keystroke_interval = behavior_data.get("avg_keystroke_interval", 125)
-    if keystroke_interval < 30:
+    if keystroke_interval is not None and keystroke_interval < 30:
         return True
     
     # Check for bot-like hold duration (too short)
     hold_duration = behavior_data.get("avg_hold_duration", 85)
-    if hold_duration < 20:
+    if hold_duration is not None and hold_duration < 20:
         return True
     
     # Check for rapid session duration (too short)
     session_duration = behavior_data.get("session_duration", 1000)
-    if session_duration < 500:
+    if session_duration is not None and session_duration < 500:
         return True
     
     return False
@@ -61,11 +65,16 @@ def calculate_trust_score(behavior_data: Optional[Dict], cyberous_enabled: bool)
         return 15  # Force low trust score for attacks
     
     try:
-        # Extract metrics from behavior_data
-        keystroke_interval = behavior_data.get("avg_keystroke_interval", 125)
-        hold_duration = behavior_data.get("avg_hold_duration", 85)
-        mouse_velocity = behavior_data.get("avg_mouse_velocity", 2.5)
-        location = behavior_data.get("location", "Local Baseline")
+        # Extract metrics from behavior_data with safe defaults
+        keystroke_interval = behavior_data.get("avg_keystroke_interval", 125) if behavior_data else 125
+        hold_duration = behavior_data.get("avg_hold_duration", 85) if behavior_data else 85
+        mouse_velocity = behavior_data.get("avg_mouse_velocity", 2.5) if behavior_data else 2.5
+        location = behavior_data.get("location", "Local Baseline") if behavior_data else "Local Baseline"
+        
+        # Ensure values are numeric before calculation
+        keystroke_interval = float(keystroke_interval) if keystroke_interval is not None else 125
+        hold_duration = float(hold_duration) if hold_duration is not None else 85
+        mouse_velocity = float(mouse_velocity) if mouse_velocity is not None else 2.5
         
         # Calculate deviation from baseline for each metric
         keystroke_deviation = calculate_deviation(
@@ -99,7 +108,7 @@ def calculate_trust_score(behavior_data: Optional[Dict], cyberous_enabled: bool)
         # Round to integer
         return int(trust_score)
         
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, AttributeError):
         # If data is malformed, return moderate trust score
         return 50
 
